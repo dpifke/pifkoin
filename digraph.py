@@ -23,6 +23,10 @@
 
 """Plots the SHA256 algorithm (as used when mining) as a directional graph."""
 
+# TODO: add attributes to nodes and edges.  Node attributes should indicate
+# constant vs. state variable vs. target, edge attributes should indicate
+# transformations vs. plain assignment.
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot
@@ -131,11 +135,17 @@ for i in xrange(3):
 
         g.add_edge('g[%d][%d]' % (i, j - 1), 'h[%d][%d]' % (i, j))
 
-# We care about the second hash's first word: is it all zeroes?
-g.add_edge('a[2][0]', 'target')
+# We care about the first 32-bit word of the final output: is it all zeroes?
+g.add_edge('a[2][63]', 'target')
 
+# For now, plot using GraphViz.  The end goal here is to be able to do
+# automated analysis using NetworkX, and perhaps some sort of interactive
+# web interface.
 networkx.draw_graphviz(g)
 networkx.write_dot(g, 'sha256.dot')
+
+# To be usable, this needs scaling options, etc:
+#networkx.draw(g)
 #matplotlib.pyplot.savefig('sha256.png')
 
 # eof
