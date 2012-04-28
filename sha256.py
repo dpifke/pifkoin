@@ -21,8 +21,11 @@
 # IN THE SOFTWARE.
 #
 
-from collections import namedtuple
+"""SHA256 (FIPS 180-3) implementation for experimentation."""
+
+import collections
 import struct
+
 
 class SHA256(object):
     """
@@ -35,7 +38,7 @@ class SHA256(object):
     """
 
     # Container for the state registers between rounds:
-    State = namedtuple('State', 'a b c d e f g h')
+    State = collections.namedtuple('State', 'a b c d e f g h')
 
     # From FIPS 180-3 section 5.3.3 (page 15):
     INITIAL_STATE = State(
