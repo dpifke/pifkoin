@@ -30,6 +30,7 @@ import httplib
 import json
 import logging
 import os
+import time
 
 logger = logging.getLogger('bitcoin')
 
@@ -164,6 +165,7 @@ class Bitcoind(object):
             }
         )
 
+        start = time.time()
         response = self._rpc_conn.getresponse()
         if not response:
             raise BitcoindException('No response from bitcoind')
@@ -171,11 +173,11 @@ class Bitcoind(object):
             raise BitcoindException('%d (%s) response from bitcoind' % (response.status, response.reason))
 
         response_body = response.read().decode('utf8')
-        logger.debug('Got %d byte response from server', len(response_body))
+        logger.debug('Got %d byte response from server in %d ms', len(response_body), int((time.time() - start) * 1000.0))
         try:
             response_json = json.loads(response_body, parse_float=decimal.Decimal)
         except ValueError, e:
-            raise BitcoindException('Error parsing bitcoind response: %s', str(e))
+            raise BitcoindException('Error parsing bitcoind response: %s' % str(e))
 
         if response_json.get('error'):
             raise BitcoindException(response_json['error'])
