@@ -102,8 +102,8 @@ class Bitcoind(object):
 
                     try:
                         (var, val) = line.split('=')
-                    except IndexError:
-                        logger.warning('Could not parse line %d of %s, ignored.', lineno, filename)
+                    except ValueError:
+                        logger.warning('Could not parse line %d of %s', lineno, filename)
                         continue
 
                     var = var.rstrip().lower()
