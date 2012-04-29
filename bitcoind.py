@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import socket
+import sys
 import time
 
 logger = logging.getLogger('bitcoin')
@@ -49,16 +50,20 @@ class BitcoindException(Exception):
 class BitcoindCommand(object):
     """Callable object representing a bitcoind JSON-RPC method."""
 
-    def __init__(self, server, method):
+    def __init__(self, method, server=None):
         """Constructor."""
 
-        self.server = server
         self.method = method.lower()
+        self.server = server
 
     def __call__(self, *args):
         """JSON-RPC wrapper."""
 
-        return self.server._rpc_call(self.method, *args)
+        server = self.server
+        if not server:
+            server = Bitcoind()
+
+        return server._rpc_call(self.method, *args)
 
 
 class Bitcoind(object):
@@ -69,7 +74,7 @@ class Bitcoind(object):
 
     DEFAULT_CONFIG_FILENAME = '~/.bitcoin/bitcoin.conf'
 
-    def _parse_config(self, filename=DEFAULT_CONFIG_FILENAME):
+    def _parse_config(self, filename=DEFAULT_CONFIG_FILENAME, no_cache=False):
         """
         Returns an OrderedDict with the Bitcoin server configuration, which
         by default is located in ``~/.bitcoin/bitcoin.conf``.
@@ -78,6 +83,9 @@ class Bitcoind(object):
         not be read, an empty dictionary will be returned; it's up to the
         caller whether or not this is a fatal error.
         """
+
+        if filename in getattr(type(self), '_config_cache', {}) and not no_cache:
+            return type(self)._config_cache[filename]
 
         # Note: I would have loved to use Python's ConfigParser for this, but
         # it requires .ini-style section headings.
@@ -110,8 +118,15 @@ class Bitcoind(object):
             logger.error('%s reading %s: %s', type(e).__name__, filename, str(e))
 
         logger.debug('Read %d parameters from %s', len(config), filename)
+
+        if config and not no_cache:
+            # At least one parameter was read; memoize the results:
+            if not hasattr(type(self), '_config_cache'):
+                type(self)._config_cache = {}
+            type(self)._config_cache[filename] = config
+
         return config
-                    
+
     def __init__(self, config_filename=DEFAULT_CONFIG_FILENAME):
         """
         Constructor.  Parses RPC communication details from ``bitcoin.conf``
@@ -152,7 +167,7 @@ class Bitcoind(object):
         of a JSON-RPC method.
         """
 
-        return BitcoindCommand(self, method)
+        return BitcoindCommand(method, self)
 
     def _rpc_call(self, method, *args):
         """Performs a JSON-RPC command on the server and returns the result."""
@@ -199,6 +214,71 @@ class Bitcoind(object):
         else:
             raise BitcoindException('Invalid response from bitcoind')
 
-# eof
 
-        
+# There are two ways to use this module: either instantiate a Bitcoind and
+# call the JSON-RPC methods as methods of the instance, or use the
+# module-level shortcuts below.  The former reuses the same connection,
+# while the latter creates a new connection on each call.  The latter is also
+# dependent upon the following list being up-to-date.
+addmultisigaddress = BitcoindCommand('addmultisigaddress')
+backupwallet = BitcoindCommand('backupwallet')
+dumpprivkey = BitcoindCommand('dumpprivkey')
+encryptwallet = BitcoindCommand('encryptwallet')
+getaccount = BitcoindCommand('getaccount')
+getaccountaddress = BitcoindCommand('getaccountaddress')
+getaddressesbyaccount = BitcoindCommand('getaddressesbyaccount')
+getbalance = BitcoindCommand('getbalance')
+getblock = BitcoindCommand('getblock')
+getblockcount = BitcoindCommand('getblockcount')
+getblockhash = BitcoindCommand('getblockhash')
+getconnectioncount = BitcoindCommand('getconnectioncount')
+getdifficulty = BitcoindCommand('getdifficulty')
+getgenerate = BitcoindCommand('getgenerate')
+gethashespersec = BitcoindCommand('gethashespersec')
+getinfo = BitcoindCommand('getinfo')
+getmemorypool = BitcoindCommand('getmemorypool')
+getmininginfo = BitcoindCommand('getmininginfo')
+getnewaddress = BitcoindCommand('getnewaddress')
+getreceivedbyaccount = BitcoindCommand('getreceivedbyaccount')
+getreceivedbyaddress = BitcoindCommand('getreceivedbyaddress')
+gettransaction = BitcoindCommand('gettransaction')
+getwork = BitcoindCommand('getwork')
+help = BitcoindCommand('help')
+importprivkey = BitcoindCommand('importprivkey')
+keypoolrefill = BitcoindCommand('keypoolrefill')
+listaccounts = BitcoindCommand('listaccounts')
+listreceivedbyaccount = BitcoindCommand('listreceivedbyaccount')
+listreceivedbyaddress = BitcoindCommand('listreceivedbyaddress')
+listsinceblock = BitcoindCommand('listsinceblock')
+listtransactions = BitcoindCommand('listtransactions')
+move = BitcoindCommand('move')
+sendfrom = BitcoindCommand('sendfrom')
+sendmany = BitcoindCommand('sendmany')
+sendtoaddress = BitcoindCommand('sendtoaddress')
+setaccount = BitcoindCommand('setaccount')
+setgenerate = BitcoindCommand('setgenerate')
+settxfee = BitcoindCommand('settxfee')
+signmessage = BitcoindCommand('signmessage')
+stop = BitcoindCommand('stop')
+validateaddress = BitcoindCommand('validateaddress')
+verifymessage = BitcoindCommand('verifymessage')
+
+
+if __name__ == '__main__':
+    logging.basicConfig()
+    # Uncomment for verbosity:
+    #logging.getLogger().setLevel(logging.DEBUG)
+
+    if len(sys.argv) > 1:
+        method_name = sys.argv[1]
+    else:
+        method_name = 'help'
+
+    try:
+        print getattr(Bitcoind(), method_name)(*sys.argv[2:])
+    except BitcoindException, e:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+# eof
