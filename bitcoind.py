@@ -30,6 +30,7 @@ import httplib
 import json
 import logging
 import os
+import socket
 import time
 
 logger = logging.getLogger('bitcoin')
@@ -118,19 +119,31 @@ class Bitcoind(object):
         """
 
         config = self._parse_config(config_filename)
-        if 'rpcuser' not in config or 'rpcpassword' not in config:
+
+        try:
+            self._rpc_auth = base64.b64encode(':'.join((config['rpcuser'], config['rpcpassword'])).encode('utf8'))
+        except:
             raise BitcoindException('Unable to read RPC credentials from %s' % config_filename)
 
         self._rpc_host = config.get('rpcserver', '127.0.0.1')
-        self._rpc_port = int(config.get('rpcport', 8332))
-        timeout = int(config.get('rpctimeout', 30))
+        try:
+            socket.gethostbyname(self._rpc_host)
+        except socket.error, e:
+            raise BitcoindException('Invalid RPC server %s: %s' % (self._rpc_host, str(e)))
+
+        try:
+            self._rpc_port = int(config.get('rpcport', 8332))
+            timeout = int(config.get('rpctimeout', 30))
+        except ValueError:
+            raise BitcoindException('Error parsing RPC connection information from %s' % config_filename)
+
         if config.get('rpcssl', '').lower() in ('1', 'yes', 'true', 'y', 't'):
             logger.debug('Making HTTPS connection to %s:%d', self._rpc_host, self._rpc_port)
             self._rpc_conn = httplib.HTTPSConnection(self._rpc_host, self._rpc_port, timeout=timeout)
         else:
             logger.debug('Making HTTP connection to %s:%d', self._rpc_host, self._rpc_port)
             self._rpc_conn = httplib.HTTPConnection(self._rpc_host, self._rpc_port, timeout=timeout)
-        self._rpc_auth = base64.b64encode(':'.join((config['rpcuser'], config['rpcpassword'])).encode('utf8'))
+
         self._rpc_id = 0
 
     def __getattr__(self, method):
@@ -173,7 +186,7 @@ class Bitcoind(object):
             raise BitcoindException('%d (%s) response from bitcoind' % (response.status, response.reason))
 
         response_body = response.read().decode('utf8')
-        logger.debug('Got %d byte response from server in %d ms', len(response_body), int((time.time() - start) * 1000.0))
+        logger.debug('Got %d byte response from server in %d ms', len(response_body), (time.time() - start) * 1000.0)
         try:
             response_json = json.loads(response_body, parse_float=decimal.Decimal)
         except ValueError, e:
