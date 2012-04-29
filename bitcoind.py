@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 #
 # Copyright (c) 2012 Dave Pifke.
 #
@@ -276,7 +276,7 @@ if __name__ == '__main__':
 
     try:
         print getattr(Bitcoind(), method_name)(*sys.argv[2:])
-    except BitcoindException, e:
+    except BitcoindException:
         sys.exit(1)
     else:
         sys.exit(0)
