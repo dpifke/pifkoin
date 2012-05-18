@@ -23,6 +23,7 @@
 
 """SHA256 (FIPS 180-3) implementation for experimentation."""
 
+import binascii
 import collections
 import struct
 
@@ -81,8 +82,8 @@ class SHA256(object):
     _invert = staticmethod(lambda x: ~x)
 
     # Operations defined by FIPS 180-3 section 3.2 (page 8):
-    _rrot = staticmethod(lambda x, n: (x >> n) | (x << (32 - n)))
-    _shr = staticmethod(lambda x, n: x >> n)
+    _rrot = staticmethod(lambda x, n: ((x & 0xffffffff) >> n) | (x << (32 - n)) & 0xffffffff)
+    _shr = staticmethod(lambda x, n: (x & 0xffffffff) >> n)
 
     # Operations defined by FIPS 180-3 section 4.1.2 (page 10):
     _ch = classmethod(lambda cls, x, y, z: cls._xor(cls._and(x, y), cls._and(cls._invert(x), z)))
@@ -94,26 +95,26 @@ class SHA256(object):
 
     # Operations defined by FIPS 180-3 section 6.2.2 (page 22):
     _T1 = classmethod(lambda cls, prev, w, k: cls._sum_mod32(cls._S1(prev.e), cls._ch(prev.e, prev.f, prev.g), prev.h, w, k))
-    _T2 = classmethod(lambda cls, prev: cls._sum_mod32(cls._S0(prev.a), cls._maj(prev.b, prev.c, prev.d)))
+    _T2 = classmethod(lambda cls, prev: cls._sum_mod32(cls._S0(prev.a), cls._maj(prev.a, prev.b, prev.c)))
 
     @classmethod
-    def _round(cls, w, k, prev=INITIAL_STATE):
+    def _round(cls, number, w, prev=INITIAL_STATE):
         """
         Performs one round of SHA256 message transformation, returning the new
         message state.  See FIPS 180-3 section 6.2.2 (page 21).
 
+        :param number:
+            The round number.
+
         :param w:
             The expanded word of the input for this round.
-
-        :param k:
-            The value from K corresponding to this round.
 
         :param prev:
             Named tuple containing the working state from the previous round.
 
         """
 
-        t1 = cls._T1(prev, w, k)
+        t1 = cls._T1(prev, w, cls.K[number % 64])
         return cls.State(
             a=cls._sum_mod32(t1, cls._T2(prev)),
             b=prev.a,
@@ -125,6 +126,7 @@ class SHA256(object):
             h=prev.g
         )
 
+    @classmethod
     def _finalize(cls, state):
         """
         Returns the new state after the final internal round is complete.
@@ -144,7 +146,7 @@ class SHA256(object):
     @classmethod
     def _expand_message(cls, message):
         """
-        Returns an array of 64 32-bit words based upon 16 32-bit words from the
+        Returns a list of 64 32-bit words based upon 16 32-bit words from the
         message block being hashed.
 
         :param message:
@@ -152,9 +154,11 @@ class SHA256(object):
 
         """
 
+
+        assert len(message) == 16, '_expand_message() got %d words, expected 16' % len(message)
+
         w = list(message)
-        assert len(w) == 16, 'Input to _expand_message() should be 16 words (got %d)' % len(w)
-        for i in xrange(16, 64):
+        for i in range(16, 64):
             w.append(cls._sum_mod32(w[i - 16], cls._s0(w[i - 15]), w[i - 7], cls._s1(w[i - 2])))
         return w
 
@@ -162,41 +166,67 @@ class SHA256(object):
     def _process_block(cls, message, state=INITIAL_STATE):
         """
         Processes a block of message data, returning the new digest state.
+
+        :param message:
+            Byte string of length 64 containing the block data to hash.
         """
 
-        assert len(message) == 64, 'Input to _process_block() must be 512 bits of data'
+        assert len(message) == 64, '_process_block() got %d bytes, expected 64' % len(message)
 
-        w = cls._expand_message(struct.unpack('LLLLLLLLLLLLLLLL', message))
-        for i in xrange(64):
-            state = cls._round(w[i], cls.K[i], state)
+        w = cls._expand_message(struct.unpack('>LLLLLLLLLLLLLLLL', message))
+        for i in range(64):
+            state = cls._round(i, w[i], state)
         return cls._finalize(state)
 
     @classmethod
     def _pad_message(cls, message, length):
         """
-        Pads the final message block, per FIPS 180-3 section 5.1.1 (page 13).
+        Returns a list containing the final 1 or 2 message blocks, which
+        include the message padding per FIPS 180-3 section 5.1.1 (page 13).
+
+        :param message:
+            Byte string containing the final block data to hash.  Should be
+            less than a full block's worth (63 bytes or less).
+
+        :param length:
+            Length of the message, in bits.
+
         """
 
         assert len(message) < 64, 'Input to _pad_message() must be less than 512 bits'
-        pass # TODO
 
-    @classmethod
-    def _process_final_block(cls, message, state, length):
-        """
-        Processes the final block of message data, returning the resulting
-        digest state.  The message will be padded per the spec.
-        """
+        if len(message) <= 55:
+            # Append trailing 1 bit, then padding, then length
+            return [b''.join((
+                message,
+                b'\x80',
+                b'\x00' * (55 - len(message)),
+                struct.pack('>LL', length >> 32, length & 0xffffffff),
+            ))]
+        else:
+            # Not enough room to append length, return two blocks:
+            return [
+                # First is trailing 1 bit, then padding
+                b''.join((
+                    message,
+                    b'\x80',
+                    b'\x00' * (63 - len(message)),
+                )),
+                # Next is more padding, then length
+                ''.join((
+                    b'\x00' * 56,
+                    struct.pack('>LL', length >> 32, length & 0xffffffff),
+                )),
+            ]
 
-        pass # TODO
-
-    def __init__(self, message=''):
+    def __init__(self, message=b''):
         """
         Constructor.  Optional argument is the initial message to be hashed.
         """
 
         self.state = self.INITIAL_STATE
         self.length = 0
-        self.buffer = ''
+        self.buffer = b''
 
         self.update(message)
 
@@ -209,12 +239,13 @@ class SHA256(object):
         any remaining data in the buffer will be padded and digested.
         """
 
-        self.length += len(message)
-        self.buffer.append(str(message))
+        message = bytes(message)
+        self.length += len(message) * 8
+        self.buffer = b''.join((self.buffer, message))
 
         while len(self.buffer) >= 64:
             self.state = self._process_block(self.buffer[:64], self.state)
-            self.buffer[:512] = []
+            self.buffer[:64] = []
 
     def digest(self):
         """
@@ -226,14 +257,31 @@ class SHA256(object):
         means that update() can safely be used again after digest().
         """
 
-        state = self._process_final_block(self.buffer, self.state, self.length)
-        return struct.pack('LLLLLLLL', *state)
+        final_state = self.state
+        for block in self._pad_message(self.buffer, self.length):
+            final_state = self._process_block(block, final_state)
+
+        return struct.pack('>LLLLLLLL', *final_state)
 
     def hexdigest(self):
         """
         Like digest(), but returns a hexadecimal string.
         """
 
-        return self.digest().encode('hex')
+        return binascii.hexlify(self.digest())
+
+
+if __name__ == '__main__':
+    # Test routine.  Compares our output to that of the stdlib.
+
+    import hashlib
+    import os
+
+    message = b''
+    for i in range(2048):
+        mine = SHA256(message).hexdigest()
+        stdlib = hashlib.sha256(message).hexdigest()
+        assert mine == hashlib, '%r (mine) != %r (stdlib) calculating SHA256(%r)' % (mine, stdlib, message)
+        message = ''.join((message, os.urandom(1)))
 
 # eof
