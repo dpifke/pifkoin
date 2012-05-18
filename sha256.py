@@ -281,7 +281,7 @@ if __name__ == '__main__':
     for i in range(2048):
         mine = SHA256(message).hexdigest()
         stdlib = hashlib.sha256(message).hexdigest()
-        assert mine == hashlib, '%r (mine) != %r (stdlib) calculating SHA256(%r)' % (mine, stdlib, message)
+        assert mine == stdlib, '%r (mine) != %r (stdlib) calculating SHA256(%r) (length %d)' % (mine, stdlib, message, len(message))
         message = ''.join((message, os.urandom(1)))
 
 # eof
