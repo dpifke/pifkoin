@@ -24,8 +24,13 @@
 """SHA256 (FIPS 180-3) implementation for experimentation."""
 
 import binascii
+import codecs
 import collections
 import struct
+import sys
+
+if sys.version > '3':
+    long = int
 
 
 class SHA256(object):
@@ -101,7 +106,7 @@ class SHA256(object):
     def _round(cls, number, w, prev=INITIAL_STATE):
         """
         Performs one round of SHA256 message transformation, returning the new
-        message state.  See FIPS 180-3 section 6.2.2 (page 21).
+        message state.  See FIPS 180-3 section 6.2.2 step 3 (pages 21-22).
 
         :param number:
             The round number.
@@ -127,56 +132,71 @@ class SHA256(object):
         )
 
     @classmethod
-    def _finalize(cls, state):
+    def _finalize(cls, state, initial_state=INITIAL_STATE):
         """
-        Returns the new state after the final internal round is complete.
+        Returns the intermediate state after the final round for a given block
+        is complete.  See FIPS 180-3 section 6.2.2 step 4 (page 22).
+
+        :param state:
+            The digest state after the final round.
+
+        :param initial_state:
+            The digest state from before the first round.
+
         """
 
         return cls.State(
-            a=cls._sum_mod32(state.a, cls.INITIAL_STATE.a),
-            b=cls._sum_mod32(state.b, cls.INITIAL_STATE.b),
-            c=cls._sum_mod32(state.c, cls.INITIAL_STATE.c),
-            d=cls._sum_mod32(state.d, cls.INITIAL_STATE.d),
-            e=cls._sum_mod32(state.e, cls.INITIAL_STATE.e),
-            f=cls._sum_mod32(state.f, cls.INITIAL_STATE.f),
-            g=cls._sum_mod32(state.g, cls.INITIAL_STATE.g),
-            h=cls._sum_mod32(state.h, cls.INITIAL_STATE.h)
+            a=cls._sum_mod32(state.a, initial_state.a),
+            b=cls._sum_mod32(state.b, initial_state.b),
+            c=cls._sum_mod32(state.c, initial_state.c),
+            d=cls._sum_mod32(state.d, initial_state.d),
+            e=cls._sum_mod32(state.e, initial_state.e),
+            f=cls._sum_mod32(state.f, initial_state.f),
+            g=cls._sum_mod32(state.g, initial_state.g),
+            h=cls._sum_mod32(state.h, initial_state.h)
         )
 
     @classmethod
     def _expand_message(cls, message):
         """
         Returns a list of 64 32-bit words based upon 16 32-bit words from the
-        message block being hashed.
+        message block being hashed.  See FIPS 180-3 section 6.2.2 step 1
+        (page 21).
 
         :param message:
             Array of 16 32-bit values (512 bits total).
 
         """
 
-
         assert len(message) == 16, '_expand_message() got %d words, expected 16' % len(message)
 
         w = list(message)
         for i in range(16, 64):
             w.append(cls._sum_mod32(w[i - 16], cls._s0(w[i - 15]), w[i - 7], cls._s1(w[i - 2])))
+
         return w
 
     @classmethod
     def _process_block(cls, message, state=INITIAL_STATE):
         """
-        Processes a block of message data, returning the new digest state.
+        Processes a block of message data, returning the new digest state
+        (the intermediate hash value).  See FIPS 180-3 section 6.2.2 (pages
+        21 and 22).
 
         :param message:
             Byte string of length 64 containing the block data to hash.
+
         """
 
         assert len(message) == 64, '_process_block() got %d bytes, expected 64' % len(message)
 
         w = cls._expand_message(struct.unpack('>LLLLLLLLLLLLLLLL', message))
+
+        midstate = state
         for i in range(64):
-            state = cls._round(i, w[i], state)
-        return cls._finalize(state)
+            midstate = cls._round(i, w[i], midstate)
+
+        return cls._finalize(midstate, state)
 
     @classmethod
     def _pad_message(cls, message, length):
@@ -203,6 +223,7 @@ class SHA256(object):
                 b'\x00' * (55 - len(message)),
                 struct.pack('>LL', length >> 32, length & 0xffffffff),
             ))]
+
         else:
             # Not enough room to append length, return two blocks:
             return [
@@ -213,7 +234,7 @@ class SHA256(object):
                     b'\x00' * (63 - len(message)),
                 )),
                 # Next is more padding, then length
-                ''.join((
+                b''.join((
                     b'\x00' * 56,
                     struct.pack('>LL', length >> 32, length & 0xffffffff),
                 )),
@@ -225,7 +246,7 @@ class SHA256(object):
         """
 
         self.state = self.INITIAL_STATE
-        self.length = 0
+        self.length = long(0)
         self.buffer = b''
 
         self.update(message)
@@ -237,6 +258,10 @@ class SHA256(object):
         Hashing uses 512-bit blocks, so the message is buffered until there's
         enough data to process a complete block.  When digest() is called,
         any remaining data in the buffer will be padded and digested.
+
+        :param message:
+            A byte string to digest.
+
         """
 
         message = bytes(message)
@@ -245,7 +270,7 @@ class SHA256(object):
 
         while len(self.buffer) >= 64:
             self.state = self._process_block(self.buffer[:64], self.state)
-            self.buffer[:64] = []
+            self.buffer = self.buffer[64:]
 
     def digest(self):
         """
@@ -255,6 +280,7 @@ class SHA256(object):
         update().  Any buffered data will be processed (along with the
         terminating length), however the internal state is not modified.  This
         means that update() can safely be used again after digest().
+
         """
 
         final_state = self.state
@@ -264,24 +290,53 @@ class SHA256(object):
         return struct.pack('>LLLLLLLL', *final_state)
 
     def hexdigest(self):
-        """
-        Like digest(), but returns a hexadecimal string.
-        """
+        """Like digest(), but returns a hexadecimal string."""
 
         return binascii.hexlify(self.digest())
 
 
 if __name__ == '__main__':
-    # Test routine.  Compares our output to that of the stdlib.
+    # Test routine.  Compares our output to that of the stdlib.  We also
+    # print some timings, although keep in mind we're not built for speed so
+    # the performance comparison is of dubious utility.
 
     import hashlib
     import os
+    import sys
+    import time
 
-    message = b''
-    for i in range(2048):
-        mine = SHA256(message).hexdigest()
-        stdlib = hashlib.sha256(message).hexdigest()
-        assert mine == stdlib, '%r (mine) != %r (stdlib) calculating SHA256(%r) (length %d)' % (mine, stdlib, message, len(message))
-        message = ''.join((message, os.urandom(1)))
+    try:
+        count = int(sys.argv[1])
+    except (ValueError, IndexError):
+        count = 1000 # default
+
+    mine = []
+    stdlib = []
+    message = os.urandom(count)
+
+    try:
+        consumed = 0
+        start = time.time()
+        for i in range(count):
+            mine.append(SHA256(message[:i]).hexdigest())
+            consumed += i
+    finally:
+        elapsed = time.time() - start
+        print ('Mine: %d hashes (%d bytes) in %0.2f secs (%0.2f H/s %d B/s)' % (i+1, consumed, elapsed, float(i+1) / elapsed, float(consumed) / elapsed))
+
+    try:
+        consumed = 0
+        start = time.time()
+        for i in range(count):
+            # The encoding before is to make sure we're comparing the same
+            # types (bytes to bytes).  This is a Python 3 issue.
+            stdlib.append(codecs.latin_1_encode(hashlib.sha256(message[:i]).hexdigest())[0])
+            consumed += i
+    finally:
+        elapsed = time.time() - start
+        print ('stdlib: %d hashes (%d bytes) in %0.2f secs (%0.2f H/s %d B/s)' % (i+1, consumed, elapsed, float(i+1) / elapsed, float(consumed) / elapsed))
+
+    for a, b, i in zip(mine, stdlib, range(count)):
+        assert a == b, '%r (mine) != %r (stdlib) calculating SHA256(%r) of length %d' % (a, b, message[:i], i)
 
 # eof
