@@ -26,7 +26,10 @@
 import base64
 import collections
 import decimal
-import httplib
+try:
+    import http.client as httplib
+except ImportError:
+    import httplib
 import json
 import logging
 import os
@@ -114,7 +117,7 @@ class Bitcoind(object):
 
                     config[var] = val
 
-        except Exception, e:
+        except Exception as e:
             logger.error('%s reading %s: %s', type(e).__name__, filename, str(e))
 
         logger.debug('Read %d parameters from %s', len(config), filename)
@@ -136,14 +139,14 @@ class Bitcoind(object):
         config = self._parse_config(config_filename)
 
         try:
-            self._rpc_auth = base64.b64encode(':'.join((config['rpcuser'], config['rpcpassword'])).encode('utf8'))
+            self._rpc_auth = base64.b64encode(':'.join((config['rpcuser'], config['rpcpassword'])).encode('utf8')).decode('utf8')
         except:
             raise BitcoindException('Unable to read RPC credentials from %s' % config_filename)
 
         self._rpc_host = config.get('rpcserver', '127.0.0.1')
         try:
             socket.gethostbyname(self._rpc_host)
-        except socket.error, e:
+        except socket.error as e:
             raise BitcoindException('Invalid RPC server %s: %s' % (self._rpc_host, str(e)))
 
         try:
@@ -204,7 +207,7 @@ class Bitcoind(object):
         logger.debug('Got %d byte response from server in %d ms', len(response_body), (time.time() - start) * 1000.0)
         try:
             response_json = json.loads(response_body, parse_float=decimal.Decimal)
-        except ValueError, e:
+        except ValueError as e:
             raise BitcoindException('Error parsing bitcoind response: %s' % str(e))
 
         if response_json.get('error'):
@@ -275,7 +278,7 @@ if __name__ == '__main__':
         method_name = 'help'
 
     try:
-        print getattr(Bitcoind(), method_name)(*sys.argv[2:])
+        print(getattr(Bitcoind(), method_name)(*sys.argv[2:]))
     except BitcoindException:
         sys.exit(1)
     else:
