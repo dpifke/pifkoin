@@ -28,11 +28,22 @@ import bitcoind
 import contextlib
 import datetime
 import decimal
+import hashlib
+import struct
 import sys
+import time
 
 if sys.version > '3':
     long = int
     unicode = str
+
+
+def bytes_to_long(value):
+    """Converts the bytestring *value* to a long."""
+
+    # long() doesn't accept base 256, so we have to convert to base 16 first.
+    # Seems like there should be a more efficient way to do this.
+    return long(binascii.hexlify(value), 16)
 
 
 def compact(number):
@@ -65,7 +76,7 @@ def uncompact(value):
         length = ord(length)
     if len(value) < length:
         value = b''.join((value, b'\x00' * (length - len(value))))
-    return long(binascii.hexlify(value), 16)
+    return bytes_to_long(value)
 
 
 # (2 ** (256 - 32) - 1) in compact representation (with requisite loss of
@@ -116,7 +127,7 @@ class BlockHeader(object):
     def from_bitcoind(cls, height=None, hash=None):
         """
         Static factory method that returns a new object instance for the
-        specified block.
+        specified block, which will be retrieved from the running bitcoind.
 
         :param height:
             The block number to return.  If negative, is regarded as an offset
@@ -141,9 +152,22 @@ class BlockHeader(object):
         assert hash is None or h == hash, 'Must specify height or hash, not both'
 
         # Construct a new object from the JSON-RPC response
+        return cls.from_dict(conn.getblock(h))
+
+    @classmethod
+    def from_dict(cls, d):
+        """
+        Static factory method that returns a new object instance built from
+        a dictionary.
+
+        :param d:
+            The dictionary of values.
+
+        """
+
         return cls(**dict([
             (k, cls._cond_unhexlify(v))
-            for k, v in conn.getblock(h).items()
+            for k, v in d.items()
             if k in cls.PARAMETERS
         ]))
 
@@ -177,7 +201,7 @@ class BlockHeader(object):
         else:
             self.bits = None
         self.nonce = nonce
-        self.hash = None
+        self.hash = hash
 
     @property
     def difficulty(self):
@@ -200,10 +224,57 @@ class BlockHeader(object):
             ')',
         ))
 
+    def calculate_hash(self, sha_impl=hashlib.sha256):
+        """
+        (Re-)calculates block hash, returning the new hash value.  Raises
+        ValueError (without modifying the existing hash value) if the
+        resulting hash does not meet the required difficulty.
+
+        :param sha_impl:
+            SHA256 implementation to use.  Defaults to the one from the
+            Python standard library, but can be overridden for tracing or
+            experimentation.
+
+        """
+
+        # See https://en.bitcoin.it/wiki/Block_hashing_algorithm:
+        message = b''.join((
+            struct.pack('<L', self.version),
+            self.previousblockhash[::-1],
+            self.merkleroot[::-1],
+            struct.pack('<L', time.mktime(self.time.timetuple())),
+            self.bits[::-1],
+            struct.pack('<L', self.nonce),
+        ))
+        h = sha_impl(sha_impl(message).digest()).digest()[::-1]
+
+        if bytes_to_long(h) > uncompact(self.bits):
+            raise ValueError, 'Hash does not meet required difficulty'
+
+        self.hash = h
+        return self.hash
+
 
 if __name__ == '__main__':
-    # Test routine: prints the most recent block header.
+    # Can be called from commandline to fetch and print a given block.
 
-    print(BlockHeader.from_bitcoind(-1))
+    try:
+        height = int(sys.argv[1])
+    except (IndexError, ValueError):
+        try:
+            hash = sys.argv[1]
+        except IndexError:
+            height = -1
+            hash = None
+        else:
+            height = None
+    else:
+        hash = None
+
+    bh = BlockHeader.from_bitcoind(height, hash)
+    print(bh)
+
+    # Also verify that we can recalculate the hash value:
+    bh.calculate_hash()
 
 # eof
