@@ -123,8 +123,29 @@ class BlockHeader(object):
 
     PARAMETERS = ('height', 'version', 'previousblockhash', 'merkleroot', 'time', 'bits', 'nonce', 'hash')
 
+    @staticmethod
+    def _get_bitcoind(**bitcoind_args):
+        """
+        Returns a connection to bitcoind.  The caller can specify an existing
+        connection to use, or one will be created.
+
+        :param bitcoind:
+            The existing connection to use.  Must be the only argument if
+            present.  If omitted, any remaining arguments will be passed to
+            the bitcoind constructor.
+
+        """
+
+        if 'bitcoind' in bitcoind_args:
+            conn = bitcoind.args.pop('bitcoind')
+            assert not bitcoind_args, 'Can specify bitcoind connection or options, not both'
+        else:
+            conn = bitcoind.Bitcoind(**bitcoind_args)
+
+        return conn
+
     @classmethod
-    def from_bitcoind(cls, height=None, hash=None):
+    def from_blockchain(cls, height=None, hash=None, **bitcoind_args):
         """
         Static factory method that returns a new object instance for the
         specified block, which will be retrieved from the running bitcoind.
@@ -136,12 +157,12 @@ class BlockHeader(object):
 
         :param hash:
             The block hash to return.
-        
+
         """
 
         assert height or hash, 'Must specify either height or hash'
 
-        conn = bitcoind.Bitcoind()
+        conn = cls._get_bitcoind(**bitcoind_args)
 
         # Look up the block hash if not specified in the method args
         h = hash
@@ -171,6 +192,54 @@ class BlockHeader(object):
             if k in cls.PARAMETERS
         ]))
 
+    @classmethod
+    def from_getwork(cls, **bitcoind_args):
+        """
+        Static factory method which returns a new object instance based upon
+        a getwork request to the running bitcoind.
+        """
+
+        # The byte ordering returned from getwork is bizarre.  You have to
+        # reverse the byte order of every 4-byte word.
+        hexdata = cls._get_bitcoind(**bitcoind_args).getwork()['data']
+        return cls.from_bytes(b''.join([
+            binascii.unhexlify(hexdata[i:i+8])[::-1]
+            for i in range(0, len(hexdata), 8)
+        ]))
+
+    @classmethod
+    def from_bytes(cls, data):
+        """
+        Static factory method which returns a new object instance with the
+        decoded parameters from *data*.
+
+        :param data:
+            Bytestring to decode.
+
+        """
+
+        return cls(
+            version=struct.unpack('<L', data[:4])[0],
+            previousblockhash=data[4:36][::-1],
+            merkleroot=data[36:68][::-1],
+            time=struct.unpack('<L', data[68:72])[0],
+            bits=data[72:76][::-1],
+            nonce=struct.unpack('<L', data[76:80])[0]
+        )
+
+    @property
+    def bytes(self):
+        """The block header as a bytestring, suitable for hashing."""
+
+        return b''.join((
+            struct.pack('<L', self.version),
+            self.previousblockhash[::-1],
+            self.merkleroot[::-1],
+            struct.pack('<L', time.mktime(self.time.timetuple())),
+            self.bits[::-1],
+            struct.pack('<L', self.nonce),
+        ))
+
     @staticmethod
     def _cond_unhexlify(value):
         """
@@ -188,9 +257,11 @@ class BlockHeader(object):
 
         self.height = height
         self.version = version
+        assert previousblockhash is None or len(previousblockhash) == 32, 'Previous block hash should be 256 bits long (got %d)' % (len(previousblockhash) * 8)
         self.previousblockhash = previousblockhash
+        assert merkleroot is None or len(merkleroot) == 32, 'Merkle root should be 256 bits long (got %d)' % (len(merkleroot) * 8)
         self.merkleroot = merkleroot
-        if not isinstance(time, datetime.datetime):
+        if time and not isinstance(time, datetime.datetime):
             time = datetime.datetime.fromtimestamp(time)
         self.time = time
         if bits:
@@ -201,6 +272,7 @@ class BlockHeader(object):
         else:
             self.bits = None
         self.nonce = nonce
+        assert hash is None or len(hash) == 32, 'Block hash should be 256 bits long (got %d)' % (len(hash) * 8)
         self.hash = hash
 
     @property
@@ -215,7 +287,8 @@ class BlockHeader(object):
         """Return a string representation of the object."""
 
         return ''.join((
-            'BlockHeader(',
+            type(self).__name__,
+            '(',
             ', '.join([
                 '='.join((param, repr(getattr(self, param))))
                 for param in self.PARAMETERS
@@ -238,15 +311,7 @@ class BlockHeader(object):
         """
 
         # See https://en.bitcoin.it/wiki/Block_hashing_algorithm:
-        message = b''.join((
-            struct.pack('<L', self.version),
-            self.previousblockhash[::-1],
-            self.merkleroot[::-1],
-            struct.pack('<L', time.mktime(self.time.timetuple())),
-            self.bits[::-1],
-            struct.pack('<L', self.nonce),
-        ))
-        h = sha_impl(sha_impl(message).digest()).digest()[::-1]
+        h = sha_impl(sha_impl(self.bytes).digest()).digest()[::-1]
 
         if bytes_to_long(h) > uncompact(self.bits):
             raise ValueError, 'Hash does not meet required difficulty'
@@ -271,10 +336,11 @@ if __name__ == '__main__':
     else:
         hash = None
 
-    bh = BlockHeader.from_bitcoind(height, hash)
+    bh = BlockHeader.from_blockchain(height, hash)
     print(bh)
 
-    # Also verify that we can recalculate the hash value:
-    bh.calculate_hash()
+    # Also run some tests:
+    assert BlockHeader.from_bytes(bh.bytes).bytes == bh.bytes, 'Failed to convert to or from bytes'
+    bh.calculate_hash() # raises ValueError if something's wrong
 
 # eof

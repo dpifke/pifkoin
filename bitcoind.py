@@ -77,66 +77,78 @@ class Bitcoind(object):
 
     DEFAULT_CONFIG_FILENAME = '~/.bitcoin/bitcoin.conf'
 
-    def _parse_config(self, filename=DEFAULT_CONFIG_FILENAME, no_cache=False):
+    def _parse_config(self, filename=DEFAULT_CONFIG_FILENAME, no_cache=False, **options):
         """
-        Returns an OrderedDict with the Bitcoin server configuration, which
-        by default is located in ``~/.bitcoin/bitcoin.conf``.
+        Returns an OrderedDict with the Bitcoin server configuration.
 
         Errors are logged; if the configuration file does not exist or could
         not be read, an empty dictionary will be returned; it's up to the
         caller whether or not this is a fatal error.
+
+        :param filename:
+            The filename from which the configuration should be read.  Defaults
+            to ``~/.bitcoin/bitcoin.conf``.
+
+        :param no_cache:
+            If :const:`True`, the configuration will not be memoized and any
+            previously memoized configuration will be ignored.
+
+        Any value from the configuration file can also be passed as an
+        argument in order to override the value read from disk.
+
         """
 
         if filename in getattr(type(self), '_config_cache', {}) and not no_cache:
-            return type(self)._config_cache[filename]
+            config = type(self)._config_cache[filename].copy()
+        else:
+            # Note: I would have loved to use Python's ConfigParser for this,
+            # but it requires .ini-style section headings.
+            config = collections.OrderedDict()
+            try:
+                with open(os.path.expanduser(filename)) as conf:
+                    for lineno, line in enumerate(conf):
+                        comment = line.find('#')
+                        if comment != -1:
+                            line = line[:comment]
+                        line = line.strip()
+                        if not line:
+                            continue
 
-        # Note: I would have loved to use Python's ConfigParser for this, but
-        # it requires .ini-style section headings.
-        config = collections.OrderedDict()
-        try:
-            with open(os.path.expanduser(filename)) as conf:
-                for lineno, line in enumerate(conf):
-                    comment = line.find('#')
-                    if comment != -1:
-                        line = line[:comment]
-                    line = line.strip()
-                    if not line:
-                        continue
+                        try:
+                            (var, val) = line.split('=')
+                        except ValueError:
+                            logger.warning('Could not parse line %d of %s', lineno, filename)
+                            continue
 
-                    try:
-                        (var, val) = line.split('=')
-                    except ValueError:
-                        logger.warning('Could not parse line %d of %s', lineno, filename)
-                        continue
+                        var = var.rstrip().lower()
 
-                    var = var.rstrip().lower()
+                        val = val.lstrip()
+                        if val[0] in ('"', "'") and val[1] in ('"', "'"):
+                            val = val[1:-1]
 
-                    val = val.lstrip()
-                    if val[0] in ('"', "'") and val[1] in ('"', "'"):
-                        val = val[1:-1]
+                        config[var] = val
 
-                    config[var] = val
+            except Exception as e:
+                logger.error('%s reading %s: %s', type(e).__name__, filename, str(e))
 
-        except Exception as e:
-            logger.error('%s reading %s: %s', type(e).__name__, filename, str(e))
+            logger.debug('Read %d parameters from %s', len(config), filename)
 
-        logger.debug('Read %d parameters from %s', len(config), filename)
+            if config and not no_cache:
+                # At least one parameter was read; memoize the results:
+                if not hasattr(type(self), '_config_cache'):
+                    type(self)._config_cache = {}
+                type(self)._config_cache[filename] = config.copy()
 
-        if config and not no_cache:
-            # At least one parameter was read; memoize the results:
-            if not hasattr(type(self), '_config_cache'):
-                type(self)._config_cache = {}
-            type(self)._config_cache[filename] = config
-
+        config.update(options)
         return config
 
-    def __init__(self, config_filename=DEFAULT_CONFIG_FILENAME):
+    def __init__(self, config_filename=DEFAULT_CONFIG_FILENAME, **config_options):
         """
         Constructor.  Parses RPC communication details from ``bitcoin.conf``
         and opens a connection to the server.
         """
 
-        config = self._parse_config(config_filename)
+        config = self._parse_config(config_filename, **config_options)
 
         try:
             self._rpc_auth = base64.b64encode(':'.join((config['rpcuser'], config['rpcpassword'])).encode('utf8')).decode('utf8')
