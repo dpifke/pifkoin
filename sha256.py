@@ -177,7 +177,7 @@ class SHA256(object):
         return w
 
     @classmethod
-    def _process_block(cls, message, state=INITIAL_STATE):
+    def _process_block(cls, message, state=INITIAL_STATE, round_offset=0):
         """
         Processes a block of message data, returning the new digest state
         (the intermediate hash value).  See FIPS 180-3 section 6.2.2 (pages
@@ -186,15 +186,24 @@ class SHA256(object):
         :param message:
             Byte string of length 64 containing the block data to hash.
 
+        :param state:
+            The digest state from the previous block.
+
+        :param round_offset:
+            The _round() method can be overridden to report intermediate hash
+            values, in which case it's useful to know how many rounds came
+            before.  This argument allows the caller to specify as much.
+
         """
 
         assert len(message) == 64, '_process_block() got %d bytes, expected 64' % len(message)
+        assert not round_offset % 64, 'round_offset should be a multiple of 64'
 
         w = cls._expand_message(struct.unpack('>LLLLLLLLLLLLLLLL', message))
 
         midstate = state
         for i in range(64):
-            midstate = cls._round(i, w[i], midstate)
+            midstate = cls._round(round_offset + i, w[i], midstate)
 
         return cls._finalize(midstate, state)
 
@@ -240,14 +249,26 @@ class SHA256(object):
                 )),
             ]
 
-    def __init__(self, message=b''):
+    def __init__(self, message=b'', round_offset=0):
         """
-        Constructor.  Optional argument is the initial message to be hashed.
+        Constructor.
+
+        :param message:
+            Initial data to pass to update().
+
+        :param round_offset:
+            The _round() method can be overridden to report intermediate hash
+            values, in which case it's useful to know how many rounds came
+            before.  For applications that perform double-hashing, you can
+            specify the number of rounds from the previous hash instance
+            using this parameter.
+
         """
 
         self.state = self.INITIAL_STATE
         self.length = long(0)
         self.buffer = b''
+        self.round_offset = round_offset
 
         self.update(message)
 
@@ -269,8 +290,9 @@ class SHA256(object):
         self.buffer = b''.join((self.buffer, message))
 
         while len(self.buffer) >= 64:
-            self.state = self._process_block(self.buffer[:64], self.state)
+            self.state = self._process_block(self.buffer[:64], self.state, self.round_offset)
             self.buffer = self.buffer[64:]
+            self.round_offset += 64
 
     def digest(self):
         """
@@ -285,7 +307,7 @@ class SHA256(object):
 
         final_state = self.state
         for block in self._pad_message(self.buffer, self.length):
-            final_state = self._process_block(block, final_state)
+            final_state = self._process_block(block, final_state, self.round_offset)
 
         return struct.pack('>LLLLLLLL', *final_state)
 

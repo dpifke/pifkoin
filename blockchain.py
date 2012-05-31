@@ -29,6 +29,9 @@ import contextlib
 import datetime
 import decimal
 import hashlib
+import inspect
+import sha256
+import socket
 import struct
 import sys
 import time
@@ -36,6 +39,7 @@ import time
 if sys.version > '3':
     long = int
     unicode = str
+    xrange = range
 
 
 def bytes_to_long(value):
@@ -75,7 +79,7 @@ def uncompact(value):
     if not isinstance(length, int):
         length = ord(length)
     if len(value) < length:
-        value = b''.join((value, b'\x00' * (length - len(value))))
+        value += b'\x00' * (length - len(value))
     return bytes_to_long(value)
 
 
@@ -116,6 +120,12 @@ def difficulty_to_bits(difficulty):
 
     with enough_decimal_precision():
         return compact(decimal.Decimal(MAX_TARGET) / decimal.Decimal(difficulty))
+
+
+def difficulty_to_target(difficulty):
+    """Converts difficulty to target."""
+
+    return uncompact(difficulty_to_bits(difficulty))
 
 
 class BlockHeader(object):
@@ -204,7 +214,7 @@ class BlockHeader(object):
         hexdata = cls._get_bitcoind(**bitcoind_args).getwork()['data']
         return cls.from_bytes(b''.join([
             binascii.unhexlify(hexdata[i:i+8])[::-1]
-            for i in range(0, len(hexdata), 8)
+            for i in xrange(0, len(hexdata), 8)
         ]))
 
     @classmethod
@@ -310,14 +320,122 @@ class BlockHeader(object):
 
         """
 
+        assert (self.version and self.previousblockhash and self.merkleroot and self.time and self.bits and self.nonce is not None), 'Must define all block header values prior to hashing'
+
+        # Our SHA256 implementation takes a "round offset" constructor argument
+        # for reporting purposes, which we don't want to include if using
+        # a different implementation.
+        args = { 'round_offset': 128 } if inspect.isclass(sha_impl) and issubclass(sha_impl, sha256.SHA256) else {}
+
         # See https://en.bitcoin.it/wiki/Block_hashing_algorithm:
-        h = sha_impl(sha_impl(self.bytes).digest()).digest()[::-1]
+        h = sha_impl(sha_impl(self.bytes).digest(), **args).digest()[::-1]
 
         if bytes_to_long(h) > uncompact(self.bits):
             raise ValueError, 'Hash does not meet required difficulty'
 
         self.hash = h
         return self.hash
+
+    def find_nonces(self, start=0, end=0xffffffff, difficulty=1, sha_impl=sha256.SHA256):
+        """
+        Generator which yields additional instances of this block header
+        with nonces that meet *difficulty*.
+
+        This function comprises the mining operation, although it's way too
+        slow to use for practical mining.
+
+        :param start:
+            The first nonce to try, defaults to 0.
+
+        :param end:
+            The final nonce to try, defaults to 2**32.
+
+        :param difficulty:
+            The minimum difficulty to return.  This may differ from the
+            difficulty specified in the block header, to support mining pools
+            which want to see "shares" rather than just mined blocks.  By
+            default we yield all shares with difficulty 1 (the minimum).
+
+        :param sha_impl:
+            SHA256 implementation to use.  It must support the ability to
+            run individual rounds via the same API as our implementation,
+            probably because it's a subclass of it.
+
+        """
+
+        assert (self.version and self.previousblockhash and self.merkleroot and self.time and self.bits), 'Must define all block header values prior to hashing'
+
+        target = difficulty_to_target(difficulty)
+
+        # The first block of the first hash gets processed normally:
+        midstate = sha_impl._process_block(self.bytes[:64])
+
+        # For the second block, the first few rounds are loop-invariant, so we
+        # need to work at a lower level.  Construct the message array with the
+        # ramaining data to be hashed plus pading, and calculate hash state up
+        # to where the nonce appears:
+        message2 = (
+            [
+                struct.unpack('<L', self.merkleroot[:4])[0],
+                socket.htonl(int(time.mktime(self.time.timetuple()))),
+                struct.unpack('<L', self.bits)[0],
+                0, # to be filled in later
+                0x80000000, # terminating 1 bit plus padding
+            ] +
+            [0] * 9 + # padding
+            [
+                0, # length of message in bits (MSB)
+                640, # length of message in bits (LSB)
+            ]
+        )
+        midstate2 = midstate
+        for i in xrange(3):
+            midstate2 = sha_impl._round(64+i, message2[i], midstate2)
+
+        # Now we loop over every nonce:
+        for nonce in xrange(start, end+1):
+            # Calculate the remainder of the first hash
+            message2[3] = socket.htonl(nonce)
+            w = sha_impl._expand_message(message2)
+            state = midstate2
+            for i in xrange(3, 64):
+                state = sha_impl._round(64+i, w[i], state)
+            state = sha_impl._finalize(state, midstate)
+
+            # Calculate the second hash up to round X
+            w = sha_impl._expand_message(
+                list(state) +
+                [ 0x80000000 ] + # terminating 1 bit plus padding
+                [ 0 ] * 5 + # padding
+                [
+                    0, # length in bits (MSB)
+                    256, # length in bits (LSB)
+                ]
+            )
+            state = sha_impl.INITIAL_STATE
+            for i in xrange(61):
+                state = sha_impl._round(128+i, w[i], state)
+
+            # Go no further if we don't meet the minimum difficulty
+            if state[4] != 0xa41f32e7:
+                continue
+
+            # Calculate the remainder of the second hash
+            for i in xrange(61, 64):
+                state = sha_impl._round(128+i, w[i], state)
+            state = sha_impl._finalize(state)
+            h = struct.pack('>LLLLLLLL', *state)[::-1]
+
+            if bytes_to_long(h) < target:
+                yield type(self)(
+                    version=self.version,
+                    previousblockhash=self.previousblockhash,
+                    merkleroot=self.merkleroot,
+                    time=self.time,
+                    bits=self.bits,
+                    nonce=nonce,
+                    hash=h
+                )
 
 
 if __name__ == '__main__':
@@ -342,5 +460,6 @@ if __name__ == '__main__':
     # Also run some tests:
     assert BlockHeader.from_bytes(bh.bytes).bytes == bh.bytes, 'Failed to convert to or from bytes'
     bh.calculate_hash() # raises ValueError if something's wrong
+    assert len(list(bh.find_nonces(bh.nonce-1, bh.nonce+1))) >= 1, 'Failed to find nonce'
 
 # eof
