@@ -394,15 +394,18 @@ class BlockHeader(object):
 
         # Now we loop over every nonce:
         for nonce in xrange(start, end+1):
-            # Calculate the remainder of the first hash
+            # We can now insert the nonce into the message to be hashed and
+            # expand the message into the w array
             message2[3] = socket.htonl(nonce)
             w = sha_impl._expand_message(message2)
+
+            # Calculate the remainder of the first hash
             state = midstate2
             for i in xrange(3, 64):
                 state = sha_impl._round(64+i, w[i], state)
             state = sha_impl._finalize(state, midstate)
 
-            # Calculate the second hash up to round X
+            # Now we want the hash of the hash:
             w = sha_impl._expand_message(
                 list(state) +
                 [ 0x80000000 ] + # terminating 1 bit plus padding
@@ -412,20 +415,27 @@ class BlockHeader(object):
                     256, # length in bits (LSB)
                 ]
             )
+
+            # The final 3 rounds will shift the e register down to h without
+            # modifying it, and h must be all zeros post-_finalize(), so in
+            # most cases we can bypass those rounds.  Calculate the second
+            # hash up until that point:
             state = sha_impl.INITIAL_STATE
             for i in xrange(61):
                 state = sha_impl._round(128+i, w[i], state)
 
             # Go no further if we don't meet the minimum difficulty
-            if state[4] != 0xa41f32e7:
+            if state[4] != 0xa41f32e7: # 0xa41f32e7 + INITIAL_STATE.h == 0
                 continue
 
-            # Calculate the remainder of the second hash
+            # Calculate the remainder of the second hash:
             for i in xrange(61, 64):
                 state = sha_impl._round(128+i, w[i], state)
             state = sha_impl._finalize(state)
             h = struct.pack('>LLLLLLLL', *state)[::-1]
 
+            # We know we meet the minimum difficulty, but target may be more
+            # stringent, so only yield this hash if it's desired:
             if bytes_to_long(h) < target:
                 yield type(self)(
                     version=self.version,
