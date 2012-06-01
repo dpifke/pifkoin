@@ -24,13 +24,13 @@
 """Utilities for parsing and interacting with the Bitcoin blockchain."""
 
 import binascii
-import bitcoind
 import contextlib
 import datetime
 import decimal
 import hashlib
 import inspect
-import sha256
+import pifkoin.bitcoind
+import pifkoin.sha256
 import socket
 import struct
 import sys
@@ -147,10 +147,10 @@ class BlockHeader(object):
         """
 
         if 'bitcoind' in bitcoind_args:
-            conn = bitcoind.args.pop('bitcoind')
+            conn = pifkoin.bitcoind.args.pop('bitcoind')
             assert not bitcoind_args, 'Can specify bitcoind connection or options, not both'
         else:
-            conn = bitcoind.Bitcoind(**bitcoind_args)
+            conn = pifkoin.bitcoind.Bitcoind(**bitcoind_args)
 
         return conn
 
@@ -325,7 +325,7 @@ class BlockHeader(object):
         # Our SHA256 implementation takes a "round offset" constructor argument
         # for reporting purposes, which we don't want to include if using
         # a different implementation.
-        args = { 'round_offset': 128 } if inspect.isclass(sha_impl) and issubclass(sha_impl, sha256.SHA256) else {}
+        args = { 'round_offset': 128 } if inspect.isclass(sha_impl) and issubclass(sha_impl, pifkoin.sha256.SHA256) else {}
 
         # See https://en.bitcoin.it/wiki/Block_hashing_algorithm:
         h = sha_impl(sha_impl(self.bytes).digest(), **args).digest()[::-1]
@@ -336,7 +336,7 @@ class BlockHeader(object):
         self.hash = h
         return self.hash
 
-    def find_nonces(self, start=0, end=0xffffffff, difficulty=1, sha_impl=sha256.SHA256):
+    def find_nonces(self, start=0, end=0xffffffff, difficulty=1, sha_impl=pifkoin.sha256.SHA256):
         """
         Generator which yields additional instances of this block header
         with nonces that meet *difficulty*.

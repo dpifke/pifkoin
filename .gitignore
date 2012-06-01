@@ -1,3 +1,7 @@
+MANIFEST
+build/*
+dist/*
+deb_dist/*
 *.pyc
 *.pyo
 *_flymake.*
