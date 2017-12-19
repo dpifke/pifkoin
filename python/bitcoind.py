@@ -128,6 +128,8 @@ class Bitcoind(object):
 
                         config[var] = val
 
+                    conf.close()
+
             except Exception as e:
                 logger.error('%s reading %s: %s', type(e).__name__, filename, str(e))
 
