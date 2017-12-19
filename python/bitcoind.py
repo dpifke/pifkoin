@@ -194,6 +194,7 @@ class Bitcoind(object):
         self._rpc_id += 1
 
         logger.debug('Starting "%s" JSON-RPC request', method)
+        self._rpc_conn.connect()
         self._rpc_conn.request(
             method='POST',
             url='/',
