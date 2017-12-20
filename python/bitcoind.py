@@ -128,6 +128,8 @@ class Bitcoind(object):
 
                         config[var] = val
 
+                    conf.close()
+
             except Exception as e:
                 logger.error('%s reading %s: %s', type(e).__name__, filename, str(e))
 
@@ -192,6 +194,7 @@ class Bitcoind(object):
         self._rpc_id += 1
 
         logger.debug('Starting "%s" JSON-RPC request', method)
+        self._rpc_conn.connect()
         self._rpc_conn.request(
             method='POST',
             url='/',
